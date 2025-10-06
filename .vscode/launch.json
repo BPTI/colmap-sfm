@@ -1,0 +1,31 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug automatic_reconstructor",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "/home/patrikas_vanagas/0_orthophoto_code/sfm/colmap-sfm/build/src/colmap/exe/colmap",
+      "args": [
+       "automatic_reconstructor",
+        "--image_path", "/home/patrikas_vanagas/0_colmap_tests/packet16_copy/images",
+        "--workspace_path", "/home/patrikas_vanagas/0_colmap_tests/packet16_copy/workspace",
+        "--dense", "0", 
+        "--sparse", "1", 
+        "--Mapper.use_prior_position", "1"
+        // "--num_threads", "1",
+        // "--SiftExtraction.use_gpu", "0",
+        // "--SiftMatching.use_gpu", "0"
+      ],
+      "cwd": "/home/patrikas_vanagas/0_orthophoto_code/sfm/colmap-sfm",
+      "MIMode": "gdb",
+      "stopAtEntry": false,
+    //   "environment": [
+    //     { "name": "OMP_NUM_THREADS", "value": "1" }
+    //   ],
+      "setupCommands": [
+        { "description": "Enable pretty-printing", "text": "-enable-pretty-printing", "ignoreFailures": true }
+      ]
+    }
+  ]
+}

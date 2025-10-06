@@ -7,7 +7,7 @@ compile_commands.json
 
 # Custom directories
 .idea/
-.vscode
+# .vscode
 .vs
 .DS_Store
 .cache
