@@ -12,7 +12,7 @@
         "--workspace_path", "/home/patrikas_vanagas/0_colmap_tests/packet16_copy/workspace",
         "--dense", "0", 
         "--sparse", "1", 
-        "--Mapper.use_prior_position", "1"
+        // "--Mapper.use_prior_position", "1"
         // "--num_threads", "1",
         // "--SiftExtraction.use_gpu", "0",
         // "--SiftMatching.use_gpu", "0"
