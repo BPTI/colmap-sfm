@@ -85,8 +85,8 @@ int main(int argc, char** argv) {
   std::vector<std::pair<std::string, command_func_t>> commands;
   commands.emplace_back("gui", &colmap::RunGraphicalUserInterface);
   commands.emplace_back("automatic_reconstructor",
-                        &colmap::RunAutomaticReconstructor);
-  commands.emplace_back("bundle_adjuster", &colmap::RunBundleAdjuster);
+                        &colmap::RunAutomaticReconstructor); // svarbu
+  commands.emplace_back("bundle_adjuster", &colmap::RunBundleAdjuster); // svarbu
   commands.emplace_back("color_extractor", &colmap::RunColorExtractor);
   commands.emplace_back("database_cleaner", &colmap::RunDatabaseCleaner);
   commands.emplace_back("database_creator", &colmap::RunDatabaseCreator);
