@@ -1,7 +1,6 @@
 COLMAP
 ======
 
-### cudss + Ceres+ COLMAP installation
 # cuDSS
 
 ### Choose the latest Linux x86_64 cuDSS archive that matches CUDA 12.x from NVIDIA.
