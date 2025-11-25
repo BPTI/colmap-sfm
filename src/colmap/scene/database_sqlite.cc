@@ -29,11 +29,41 @@
 
 #include "colmap/scene/database.h"
 #include "colmap/util/endian.h"
-#include "colmap/util/sqlite3_utils.h"
 #include "colmap/util/string.h"
+
+#include <sqlite3.h>
 
 namespace colmap {
 namespace {
+
+inline int SQLite3CallHelper(int result_code,
+                             const std::string& filename,
+                             int line) {
+  switch (result_code) {
+    case SQLITE_OK:
+    case SQLITE_ROW:
+    case SQLITE_DONE:
+      return result_code;
+    default:
+      LogMessageFatalThrow<std::runtime_error>(filename.c_str(), line).stream()
+          << "SQLite error: " << sqlite3_errstr(result_code);
+      return result_code;
+  }
+}
+
+#define SQLITE3_CALL(func) SQLite3CallHelper(func, __FILE__, __LINE__)
+
+#define SQLITE3_EXEC(database, sql, callback)                             \
+  {                                                                       \
+    char* err_msg = nullptr;                                              \
+    const int result_code = sqlite3_exec(                                 \
+        THROW_CHECK_NOTNULL(database), sql, callback, nullptr, &err_msg); \
+    if (result_code != SQLITE_OK) {                                       \
+      LOG(ERROR) << "SQLite error [" << __FILE__ << ", line " << __LINE__ \
+                 << "]: " << err_msg;                                     \
+      sqlite3_free(err_msg);                                              \
+    }                                                                     \
+  }
 
 struct Sqlite3StmtContext {
   explicit Sqlite3StmtContext(sqlite3_stmt* sql_stmt)
@@ -45,7 +75,9 @@ struct Sqlite3StmtContext {
 };
 
 void SwapFeatureMatchesBlob(FeatureMatchesBlob* matches) {
-  matches->col(0).swap(matches->col(1));
+  for (Eigen::Index i = 0; i < matches->rows(); ++i) {
+    std::swap((*matches)(i, 0), (*matches)(i, 1));
+  }
 }
 
 FeatureKeypointsBlob FeatureKeypointsToBlob(const FeatureKeypoints& keypoints) {
@@ -509,8 +541,8 @@ class SqliteDatabase : public Database {
                        ImagePairToPairId(image_id1, image_id2));
   }
 
-  bool ExistsInlierMatches(const image_t image_id1,
-                           const image_t image_id2) const override {
+  bool ExistsTwoViewGeometry(const image_t image_id1,
+                             const image_t image_id2) const override {
     return ExistsRowId(sql_stmt_exists_two_view_geometry_,
                        ImagePairToPairId(image_id1, image_id2));
   }
@@ -1128,6 +1160,9 @@ class SqliteDatabase : public Database {
   void WriteTwoViewGeometry(const image_t image_id1,
                             const image_t image_id2,
                             const TwoViewGeometry& two_view_geometry) override {
+    THROW_CHECK(!ExistsTwoViewGeometry(image_id1, image_id2))
+        << "Two view geometry between image " << image_id1 << " and "
+        << image_id2 << " already exists.";
     Sqlite3StmtContext context(sql_stmt_write_two_view_geometry_);
 
     const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
@@ -1165,27 +1200,13 @@ class SqliteDatabase : public Database {
         two_view_geometry_ptr->cam2_from_cam1.rotation.y(),
         two_view_geometry_ptr->cam2_from_cam1.rotation.z());
 
-    if (two_view_geometry_ptr->inlier_matches.size() > 0) {
-      WriteStaticMatrixBlob(sql_stmt_write_two_view_geometry_, Ft, 6);
-      WriteStaticMatrixBlob(sql_stmt_write_two_view_geometry_, Et, 7);
-      WriteStaticMatrixBlob(sql_stmt_write_two_view_geometry_, Ht, 8);
-      WriteStaticMatrixBlob(sql_stmt_write_two_view_geometry_, quat_wxyz, 9);
-      WriteStaticMatrixBlob(sql_stmt_write_two_view_geometry_,
-                            two_view_geometry_ptr->cam2_from_cam1.translation,
-                            10);
-    } else {
-      WriteStaticMatrixBlob(
-          sql_stmt_write_two_view_geometry_, Eigen::MatrixXd(0, 0), 6);
-      WriteStaticMatrixBlob(
-          sql_stmt_write_two_view_geometry_, Eigen::MatrixXd(0, 0), 7);
-      WriteStaticMatrixBlob(
-          sql_stmt_write_two_view_geometry_, Eigen::MatrixXd(0, 0), 8);
-      WriteStaticMatrixBlob(
-          sql_stmt_write_two_view_geometry_, Eigen::MatrixXd(0, 0), 9);
-      WriteStaticMatrixBlob(
-          sql_stmt_write_two_view_geometry_, Eigen::MatrixXd(0, 0), 10);
-    }
-
+    WriteStaticMatrixBlob(sql_stmt_write_two_view_geometry_, Ft, 6);
+    WriteStaticMatrixBlob(sql_stmt_write_two_view_geometry_, Et, 7);
+    WriteStaticMatrixBlob(sql_stmt_write_two_view_geometry_, Ht, 8);
+    WriteStaticMatrixBlob(sql_stmt_write_two_view_geometry_, quat_wxyz, 9);
+    WriteStaticMatrixBlob(sql_stmt_write_two_view_geometry_,
+                          two_view_geometry_ptr->cam2_from_cam1.translation,
+                          10);
     SQLITE3_CALL(sqlite3_step(sql_stmt_write_two_view_geometry_));
   }
 
@@ -1299,6 +1320,33 @@ class SqliteDatabase : public Database {
     SQLITE3_CALL(sqlite3_step(sql_stmt_update_pose_prior_));
   }
 
+  void UpdateKeypoints(image_t image_id,
+                       const FeatureKeypoints& keypoints) override {
+    UpdateKeypoints(image_id, FeatureKeypointsToBlob(keypoints));
+  }
+
+  void UpdateKeypoints(image_t image_id,
+                       const FeatureKeypointsBlob& blob) override {
+    Sqlite3StmtContext context(sql_stmt_update_keypoints_);
+
+    WriteDynamicMatrixBlob(sql_stmt_update_keypoints_, blob, 1);
+    SQLITE3_CALL(sqlite3_bind_int64(sql_stmt_update_keypoints_, 4, image_id));
+
+    SQLITE3_CALL(sqlite3_step(sql_stmt_update_keypoints_));
+  }
+
+  void UpdateTwoViewGeometry(
+      const image_t image_id1,
+      const image_t image_id2,
+      const TwoViewGeometry& two_view_geometry) override {
+    // Do nothing if the image pair does not exist, to align with the UPDATE
+    // behavior in SQL.
+    if (ExistsTwoViewGeometry(image_id1, image_id2)) {
+      DeleteTwoViewGeometry(image_id1, image_id2);
+      WriteTwoViewGeometry(image_id1, image_id2, two_view_geometry);
+    }
+  }
+
   void DeleteMatches(const image_t image_id1,
                      const image_t image_id2) override {
     Sqlite3StmtContext context(sql_stmt_delete_matches_);
@@ -1310,8 +1358,8 @@ class SqliteDatabase : public Database {
     database_entry_deleted_ = true;
   }
 
-  void DeleteInlierMatches(const image_t image_id1,
-                           const image_t image_id2) override {
+  void DeleteTwoViewGeometry(const image_t image_id1,
+                             const image_t image_id2) override {
     Sqlite3StmtContext context(sql_stmt_delete_two_view_geometry_);
 
     const image_pair_t pair_id = ImagePairToPairId(image_id1, image_id2);
@@ -1320,6 +1368,16 @@ class SqliteDatabase : public Database {
                                     static_cast<sqlite3_int64>(pair_id)));
     SQLITE3_CALL(sqlite3_step(sql_stmt_delete_two_view_geometry_));
     database_entry_deleted_ = true;
+  }
+
+  void DeleteInlierMatches(const image_t image_id1,
+                           const image_t image_id2) override {
+    if (!ExistsTwoViewGeometry(image_id1, image_id2)) {
+      return;
+    }
+    TwoViewGeometry geom = ReadTwoViewGeometry(image_id1, image_id2);
+    geom.inlier_matches.clear();
+    UpdateTwoViewGeometry(image_id1, image_id2, geom);
   }
 
   void ClearAllTables() override {
@@ -1577,11 +1635,11 @@ class SqliteDatabase : public Database {
   void PrepareSQLStatements() {
     sql_stmts_.clear();
 
-    auto prepare_sql_stmt = [this](const std::string_view sql,
+    auto prepare_sql_stmt = [this](const std::string& sql,
                                    sqlite3_stmt** sql_stmt) {
       THROW_CHECK_NOTNULL(database_);
       VLOG(3) << "Preparing SQL statement: " << sql;
-      SQLITE3_CALL(sqlite3_prepare_v2(database_, sql.data(), -1, sql_stmt, 0));
+      SQLITE3_CALL(sqlite3_prepare_v2(database_, sql.c_str(), -1, sql_stmt, 0));
       sql_stmts_.push_back(sql_stmt);
     };
 
@@ -1660,6 +1718,9 @@ class SqliteDatabase : public Database {
         "UPDATE pose_priors SET position=?, coordinate_system=?, "
         "position_covariance=? WHERE image_id=?;",
         &sql_stmt_update_pose_prior_);
+    prepare_sql_stmt(
+        "UPDATE keypoints SET rows=?, cols=?, data=? WHERE image_id=?;",
+        &sql_stmt_update_keypoints_);
 
     //////////////////////////////////////////////////////////////////////////////
     // read_*
@@ -2192,6 +2253,7 @@ class SqliteDatabase : public Database {
   sqlite3_stmt* sql_stmt_update_frame_ = nullptr;
   sqlite3_stmt* sql_stmt_update_image_ = nullptr;
   sqlite3_stmt* sql_stmt_update_pose_prior_ = nullptr;
+  sqlite3_stmt* sql_stmt_update_keypoints_ = nullptr;
 
   // read_*
   sqlite3_stmt* sql_stmt_read_rig_ = nullptr;
